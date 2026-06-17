@@ -43,27 +43,47 @@ export function getNetworkConfig(): StellarNetworkConfig {
 /**
  * Fetches recent contract events from Soroban RPC.
  *
- * NOTE: This is a stub. In production, use stellar-sdk's SorobanRpc.Server
- * to call getEvents() with the contract ID filter.
+ * This is a simple fetch wrapper. For production polling with rate limit
+ * handling, use the indexer module (./indexer.ts) which implements
+ * exponential backoff retry logic.
  *
- * Example production implementation:
- * ```typescript
- * import { SorobanRpc } from "stellar-sdk";
- *
- * const server = new SorobanRpc.Server(config.sorobanRpcUrl);
- * const result = await server.getEvents({
- *   startLedger: latestLedger - 1000,
- *   filters: [{ type: "contract", contractIds: [contractId] }],
- * });
- * return result.events;
- * ```
+ * @param contractId - The contract ID to fetch events for
+ * @param config - Network configuration
+ * @param startLedger - Optional starting ledger (defaults to 1000 ledgers ago)
+ * @returns Array of contract events
  */
 export async function fetchContractEvents(
   contractId: string,
-  config: StellarNetworkConfig = TESTNET_CONFIG
+  config: StellarNetworkConfig = TESTNET_CONFIG,
+  startLedger?: number
 ): Promise<unknown[]> {
-  // Stub — returns empty array until real RPC integration is wired up.
-  // The dashboard uses mock data from /lib/mock-data.ts for now.
-  console.log(`[open-audit] Would fetch events for ${contractId} from ${config.sorobanRpcUrl}`);
-  return [];
+  try {
+    // Dynamically import stellar-sdk to avoid bundling issues
+    const { SorobanRpc } = await import("stellar-sdk");
+
+    const server = new SorobanRpc.Server(config.sorobanRpcUrl);
+
+    // Get latest ledger if startLedger not provided
+    let ledgerToFetch = startLedger;
+    if (!ledgerToFetch) {
+      const latestLedger = await server.getLatestLedger();
+      ledgerToFetch = Math.max(1, latestLedger.sequence - 1000);
+    }
+
+    console.log(
+      `[open-audit] Fetching events for ${contractId} from ${config.sorobanRpcUrl} starting at ledger ${ledgerToFetch}`
+    );
+
+    const result = await server.getEvents({
+      startLedger: ledgerToFetch,
+      filters: [{ type: "contract", contractIds: [contractId] }],
+    });
+
+    console.log(`[open-audit] Fetched ${result.events?.length || 0} events`);
+
+    return result.events || [];
+  } catch (error) {
+    console.error("[open-audit] Error fetching contract events:", error);
+    throw error;
+  }
 }
