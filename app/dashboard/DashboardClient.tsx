@@ -1,13 +1,21 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { AlertCircle, BookOpen, ArrowRight } from "lucide-react";
+import { useState, useCallback, useEffect, useMemo } from "react";
+import { AlertCircle, BookOpen, ArrowRight, Upload, FileJson, Trash2 } from "lucide-react";
 import { SearchBar } from "@/components/dashboard/SearchBar";
 import { EventFeedTable } from "@/components/dashboard/EventFeedTable";
 import { StatsBar } from "@/components/dashboard/StatsBar";
+import { UploadAbiDialog } from "@/components/dashboard/UploadAbiDialog";
+import { Button } from "@/components/ui/button";
 import { translateEvents } from "@/lib/translator/registry";
+import {
+  buildCustomBlueprints,
+  loadCustomAbis,
+  removeCustomAbi,
+  saveCustomAbi,
+} from "@/lib/translator/custom-abi";
 import { getMockEventsForContract, MOCK_RAW_EVENTS } from "@/lib/mock-data";
-import type { TranslatedEvent } from "@/lib/translator/types";
+import type { CustomAbi, RawEvent } from "@/lib/translator/types";
 
 /** Simulates a network delay for realistic UX. */
 function simulateNetworkDelay(ms: number): Promise<void> {
@@ -17,16 +25,40 @@ function simulateNetworkDelay(ms: number): Promise<void> {
 }
 
 export function DashboardClient(): React.JSX.Element {
-  const [events, setEvents] = useState<TranslatedEvent[]>(function () {
-    return translateEvents(MOCK_RAW_EVENTS);
-  });
+  const [rawEvents, setRawEvents] = useState<RawEvent[]>(MOCK_RAW_EVENTS);
+  const [customAbis, setCustomAbis] = useState<CustomAbi[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchedContract, setSearchedContract] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
+
+  // Load previously uploaded ABIs from localStorage after mount. Doing this in
+  // an effect (rather than during render) keeps the server and client output
+  // identical and avoids a hydration mismatch.
+  useEffect(function () {
+    setCustomAbis(loadCustomAbis());
+  }, []);
+
+  // Custom ABIs are consulted before the global registry when translating.
+  const customBlueprints = useMemo(
+    function () {
+      return buildCustomBlueprints(customAbis);
+    },
+    [customAbis]
+  );
+
+  // Derive translations from the raw events + current custom blueprints so the
+  // feed re-translates instantly when an ABI is uploaded or removed.
+  const events = useMemo(
+    function () {
+      return translateEvents(rawEvents, customBlueprints);
+    },
+    [rawEvents, customBlueprints]
+  );
 
   const handleSearch = useCallback(async function (contractId: string): Promise<void> {
     if (!contractId) {
-      setEvents(translateEvents(MOCK_RAW_EVENTS));
+      setRawEvents(MOCK_RAW_EVENTS);
       setSearchedContract(null);
       setError(null);
       return;
@@ -39,15 +71,22 @@ export function DashboardClient(): React.JSX.Element {
       // Simulate fetching from Stellar network
       await simulateNetworkDelay(800);
 
-      const rawEvents = getMockEventsForContract(contractId);
-      const translated = translateEvents(rawEvents);
-      setEvents(translated);
+      setRawEvents(getMockEventsForContract(contractId));
       setSearchedContract(contractId);
     } catch {
       setError("Failed to fetch events. Please check the Contract ID and try again.");
     } finally {
       setIsLoading(false);
     }
+  }, []);
+
+  const handleAbiUpload = useCallback(function (abi: CustomAbi): void {
+    setCustomAbis(saveCustomAbi(abi));
+    setIsUploadOpen(false);
+  }, []);
+
+  const handleAbiRemove = useCallback(function (contractId: string): void {
+    setCustomAbis(removeCustomAbi(contractId));
   }, []);
 
   return (
@@ -87,6 +126,43 @@ export function DashboardClient(): React.JSX.Element {
         </div>
       )}
 
+      {/* Custom ABI controls */}
+      <section aria-label="Custom ABIs" className="flex flex-wrap items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={function () {
+            setIsUploadOpen(true);
+          }}
+        >
+          <Upload className="h-4 w-4 mr-2" />
+          Upload Custom ABI
+        </Button>
+
+        {customAbis.map(function (abi) {
+          return (
+            <span
+              key={abi.contractId}
+              className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 pl-2.5 pr-1.5 py-1 text-xs"
+              title={abi.contractId}
+            >
+              <FileJson className="h-3.5 w-3.5 text-violet-500" />
+              <span className="font-medium">{abi.contractName}</span>
+              <button
+                type="button"
+                onClick={function () {
+                  handleAbiRemove(abi.contractId);
+                }}
+                className="text-muted-foreground hover:text-destructive transition-colors"
+                aria-label={`Remove custom ABI for ${abi.contractName}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </span>
+          );
+        })}
+      </section>
+
       {/* Stats */}
       {!isLoading && <StatsBar events={events} />}
 
@@ -114,8 +190,8 @@ export function DashboardClient(): React.JSX.Element {
             <div>
               <p className="text-sm font-medium">Help translate more contracts</p>
               <p className="text-sm text-muted-foreground mt-0.5">
-                Open-Audit is community-powered. Add a translation blueprint and earn
-                Stellar Drips rewards.
+                Open-Audit is community-powered. Add a translation blueprint and earn Stellar Drips
+                rewards.
               </p>
             </div>
           </div>
@@ -130,6 +206,13 @@ export function DashboardClient(): React.JSX.Element {
           </a>
         </div>
       </section>
+
+      {/* Upload dialog */}
+      <UploadAbiDialog
+        open={isUploadOpen}
+        onOpenChange={setIsUploadOpen}
+        onUpload={handleAbiUpload}
+      />
     </div>
   );
 }
