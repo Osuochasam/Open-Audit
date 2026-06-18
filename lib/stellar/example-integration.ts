@@ -26,11 +26,7 @@ function convertToRawEvent(
   return {
     id: event.id,
     contractId,
-    topics: event.topic as unknown as string[], // Array of hex-encoded topics
-    data: event.value.toString(), // XDR-encoded data
-    ledger: event.ledger,
-    timestamp: Date.now(), // Note: You may want to get actual block timestamp
-    txHash: event.txHash || "unknown",
+
   };
 }
 
@@ -65,7 +61,7 @@ class EventStore {
    */
   getAllEvents(): TranslatedEvent[] {
     const allEvents: TranslatedEvent[] = [];
-    this.events.forEach((events) => {
+
       allEvents.push(...events);
     });
     // Sort by timestamp descending
