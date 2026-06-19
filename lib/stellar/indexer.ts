@@ -7,6 +7,12 @@
  */
 
 import { SorobanRpc, Horizon, xdr, scValToNative, StrKey } from "stellar-sdk";
+import {
+  initRedis,
+  getCachedEvents,
+  setCachedEvents,
+  isRedisEnabled,
+} from "../cache/redisCache";
 import type { StellarNetworkConfig } from "./client";
 import type { RawEvent } from "../translator/types";
 
@@ -102,8 +108,17 @@ export async function fetchEventsWithRetry(
   server: SorobanRpc.Server,
   contractIds: string[],
   startLedger: number,
-  retryConfig: IndexerRetryConfig = DEFAULT_RETRY_CONFIG
+  retryConfig: IndexerRetryConfig = DEFAULT_RETRY_CONFIG,
+  sorobanRpcUrl?: string
 ): Promise<SorobanRpc.Api.GetEventsResponse> {
+  if (isRedisEnabled() && sorobanRpcUrl) {
+    initRedis();
+    const cached = await getCachedEvents(sorobanRpcUrl, contractIds, startLedger);
+    if (cached) {
+      // Return cached object as if it came from RPC
+      return cached as SorobanRpc.Api.GetEventsResponse;
+    }
+  }
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
@@ -119,7 +134,13 @@ export async function fetchEventsWithRetry(
         ],
       });
 
-      // Success! Return the response
+      if (isRedisEnabled() && sorobanRpcUrl) {
+        try {
+          await setCachedEvents(sorobanRpcUrl, contractIds, startLedger, response);
+        } catch (err) {
+          console.warn("[indexer] Failed to set cache:", err);
+        }
+      }
       return response;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
@@ -249,7 +270,8 @@ export function startEventIndexer(options: IndexerOptions): IndexerControls {
           server,
           contractIds,
           cursor.lastLedger,
-          retryConfig
+          retryConfig,
+          networkConfig.sorobanRpcUrl
         );
 
         // Process the events

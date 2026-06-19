@@ -153,7 +153,8 @@ export async function ingestHistoricalRange(
         server,
         [contractId],
         chunkStart,
-        retryConfig
+        retryConfig,
+        networkConfig.sorobanRpcUrl
       );
 
       const events = response.events || [];
