@@ -10,9 +10,39 @@
  * }
  */
 
+import { toErrorResponse, validationErrorResponse } from "@/lib/api/error-response";
 import { ingestHistoricalRange } from "@/lib/stellar/historical-ingester";
 import { getNetworkConfig } from "@/lib/stellar/client";
 import { NextRequest, NextResponse } from "next/server";
+import { authenticateAndRateLimit } from "@/lib/api/middleware";
+
+// OpenAPI documentation metadata
+export const routeDoc = {
+  summary: "Ingest historical ledger range",
+  description: "Fetches and backfills contract events from a specified historical ledger range.",
+  requestBody: {
+    required: true,
+    content: {
+      "application/json": {
+        schema: {
+          type: "object",
+          required: ["contractId", "startSequence", "endSequence"],
+          properties: {
+            contractId: { type: "string", description: "The Soroban contract ID to fetch events for." },
+            startSequence: { type: "integer", description: "The starting ledger sequence number (inclusive)." },
+            endSequence: { type: "integer", description: "The ending ledger sequence number (inclusive)." },
+            chunkSize: { type: "integer", description: "Number of ledgers per chunk.", default: 1000 },
+          },
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: "Successful ingestion" },
+    400: { description: "Invalid request parameters" },
+    500: { description: "Internal server error" },
+  },
+};
 
 interface IngestRequest {
   contractId: string;
@@ -22,35 +52,36 @@ interface IngestRequest {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  try {
-    const body: IngestRequest = await request.json();
+  let contractId: string | undefined;
 
-    // Validate required fields
+  try {
+    const authError = await authenticateAndRateLimit(request);
+    if (authError) return authError;
+
+    const body: IngestRequest = await request.json();
+    contractId = body.contractId;
+
     if (!body.contractId || typeof body.startSequence !== "number" || typeof body.endSequence !== "number") {
-      return NextResponse.json(
-        { error: "Missing or invalid required fields: contractId, startSequence, endSequence" },
-        { status: 400 }
+      return validationErrorResponse(
+        "Missing or invalid required fields: contractId, startSequence, endSequence"
       );
     }
 
-    // Validate ranges
     if (body.startSequence < 1 || body.endSequence < body.startSequence) {
-      return NextResponse.json(
-        { error: "Invalid sequence range: startSequence >= 1 and endSequence >= startSequence" },
-        { status: 400 }
+      return validationErrorResponse(
+        "Invalid sequence range: startSequence >= 1 and endSequence >= startSequence"
       );
     }
 
     const chunkSize = body.chunkSize ?? 1000;
     if (chunkSize < 1) {
-      return NextResponse.json({ error: "chunkSize must be >= 1" }, { status: 400 });
+      return validationErrorResponse("chunkSize must be >= 1");
     }
 
     const networkConfig = getNetworkConfig();
     const events: unknown[] = [];
     let totalChunks = 0;
 
-    // Ingest historical range
     await ingestHistoricalRange({
       networkConfig,
       contractId: body.contractId,
@@ -60,12 +91,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       onChunkComplete: async (result) => {
         events.push(...result.events);
       },
-      onComplete: async (totalEvents, chunks) => {
+      onComplete: async (_totalEvents, chunks) => {
         totalChunks = chunks;
-      },
-      onError: (error) => {
-        console.error("[api/ingest-historical] Error:", error);
-        throw error;
       },
     });
 
@@ -83,11 +110,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    console.error("[api/ingest-historical] Request failed:", error);
-    return NextResponse.json(
-      { error: "Ingestion failed", details: message },
-      { status: 500 }
-    );
+    return toErrorResponse(error, {
+      fallbackMessage: "Ingestion failed",
+      context: contractId ? { contractId, operation: "ingest-historical" } : { operation: "ingest-historical" },
+    });
   }
 }

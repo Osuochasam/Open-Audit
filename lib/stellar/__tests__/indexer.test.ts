@@ -13,6 +13,7 @@ import {
   DEFAULT_RETRY_CONFIG,
   type IndexerCursor,
 } from "../indexer";
+import { StellarNetworkException } from "../../errors";
 
 const jest = vi;
 
@@ -73,6 +74,7 @@ describe("fetchEventsWithRetry", function () {
       mockServer as unknown as SorobanRpc.Server,
       ["contract-1"],
       1000,
+      undefined,
       DEFAULT_RETRY_CONFIG
     );
 
@@ -100,6 +102,7 @@ describe("fetchEventsWithRetry", function () {
       mockServer as unknown as SorobanRpc.Server,
       ["contract-1"],
       1000,
+      undefined,
       {
         initialDelayMs: 10, // Short delays for tests
         maxDelayMs: 100,
@@ -111,6 +114,7 @@ describe("fetchEventsWithRetry", function () {
     expect(result).toEqual(mockResponse);
     expect(mockServer.getEvents).toHaveBeenCalledTimes(3);
   });
+
 
   it("should retry timeout errors and eventually succeed", async function () {
     const mockResponse = {
@@ -141,14 +145,23 @@ describe("fetchEventsWithRetry", function () {
   it("should throw immediately on non-rate-limit errors", async function () {
     mockServer.getEvents.mockRejectedValue(new Error("Invalid contract filter"));
 
+  it("should throw immediately on non-retriable errors", async function () {
+    mockServer.getEvents.mockRejectedValue(new Error("Invalid filter parameter"));
+
+
     await expect(
       fetchEventsWithRetry(
         mockServer as unknown as SorobanRpc.Server,
         ["contract-1"],
         1000,
+        undefined,
         DEFAULT_RETRY_CONFIG
       )
+
     ).rejects.toThrow("Invalid contract filter");
+
+    ).rejects.toBeInstanceOf(StellarNetworkException);
+
 
     expect(mockServer.getEvents).toHaveBeenCalledTimes(1);
   });
@@ -157,6 +170,7 @@ describe("fetchEventsWithRetry", function () {
     mockServer.getEvents.mockRejectedValue(new Error("429 Too Many Requests"));
 
     await expect(
+
       fetchEventsWithRetry(mockServer as unknown as SorobanRpc.Server, ["contract-1"], 1000, {
         initialDelayMs: 10,
         maxDelayMs: 100,
@@ -164,6 +178,21 @@ describe("fetchEventsWithRetry", function () {
         backoffMultiplier: 2,
       })
     ).rejects.toThrow("Failed to fetch events after 2 retries");
+
+      fetchEventsWithRetry(
+        mockServer as unknown as SorobanRpc.Server,
+        ["contract-1"],
+        1000,
+        undefined,
+        {
+          initialDelayMs: 10,
+          maxDelayMs: 100,
+          maxRetries: 2,
+          backoffMultiplier: 2,
+        }
+      )
+    ).rejects.toThrow(/Failed to fetch events after 2 retries/);
+
 
     expect(mockServer.getEvents).toHaveBeenCalledTimes(3); // Initial + 2 retries
   });
