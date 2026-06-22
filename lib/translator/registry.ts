@@ -20,6 +20,7 @@
 import { createAllSacBlueprints } from "./blueprints/sac-transfer";
 import { createSacMintBurnBlueprint } from "./blueprints/sac-mint-burn";
 import { decodeEventName } from "./core";
+import { sanitizeTextField } from "./core";
 import { RegistryTemplateException } from "../errors";
 import { captureExceptionSync } from "../telemetry";
 import type {
@@ -126,9 +127,9 @@ export function translateEvent(
   }
 
   // 2. Fall back to the global community registry.
-  const blueprint = REGISTRY.get(event.contractId);
+  const entry = REGISTRY.get(event.contractId);
 
-  if (!blueprint) {
+  if (!entry) {
     console.warn(`No translation blueprint found for contract ${event.contractId}`);
     return {
       raw: event,
@@ -138,6 +139,21 @@ export function translateEvent(
       blueprintName: custom?.contractName ? sanitizeTextField(custom.contractName, { maxLength: 100 }) : null,
       eventType: null,
       schemaVersion: null,
+    };
+  }
+
+  const blueprint = Array.isArray(entry)
+    ? resolveBlueprint(entry, event.ledger)
+    : entry;
+
+  if (!blueprint) {
+    console.warn(`No translation blueprint applicable for contract ${event.contractId} at ledger ${event.ledger}`);
+    return {
+      raw: event,
+      description: `[Unknown Event: No blueprint applicable for contract ${event.contractId} at ledger ${event.ledger}. Hex Data: ${event.data}]`,
+      status: "cryptic",
+      blueprintName: Array.isArray(entry) ? entry[0].contractName : entry.contractName,
+      eventType: null,
     };
   }
 
@@ -168,8 +184,8 @@ function applyBlueprint(event: RawEvent, blueprint: TranslationBlueprint, lang: 
     description: result.description ? sanitizeTextField(result.description) : null,
     status: "translated",
     blueprintName: blueprint.contractName,
-    eventType: result.eventType,
-    schemaVersion: blueprint.version ?? null,
+    eventType: result.eventType ? sanitizeTextField(result.eventType, { maxLength: 64 }) : null,
+    schemaVersion: (blueprint as any).version ?? null,
   };
 }
 

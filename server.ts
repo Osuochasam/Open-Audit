@@ -1,6 +1,7 @@
 /**
  * Custom Next.js server with an attached WebSocket server.
  * Broadcasts newly translated Soroban events to all connected clients.
+ * Bloated event data (>2KB) is automatically offloaded to IPFS before broadcast.
  *
  * Run with: npx ts-node --project tsconfig.server.json server.ts
  * (or via the `dev:ws` npm script)
@@ -11,9 +12,10 @@ import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { MOCK_RAW_EVENTS } from "./lib/mock-data";
 import { translateEvent } from "./lib/translator/registry";
-import { startHorizonStreamingIndexer } from "./lib/stellar/indexer";
+import { createFileIngestionStateStore, startHorizonStreamingIndexer } from "./lib/stellar/indexer";
 import { getNetworkConfig } from "./lib/stellar/client";
-import { captureExceptionSync } from "./lib/telemetry";
+import { captureExceptionSync, eventsIngestedTotal, metricsHandler, recordTranslationDuration, startTelemetry } from "./lib/telemetry";
+import { startRetentionScheduler } from "./lib/retention/scheduler";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT ?? "3000", 10);
@@ -32,9 +34,14 @@ function getClientIp(req: IncomingMessage): string {
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
-app.prepare().then(() => {
+app.prepare().then(async () => {
+  await startTelemetry();
+  startRetentionScheduler();
   const httpServer = createServer((req, res) => {
-    res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://* https://horizon-testnet.stellar.org https://soroban-testnet.stellar.org https://horizon.stellar.org https://mainnet.stellar.validationcloud.io; img-src 'self' data:; font-src 'self' data:;");
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://* https://horizon-testnet.stellar.org https://soroban-testnet.stellar.org https://horizon.stellar.org https://mainnet.stellar.validationcloud.io; img-src 'self' data:; font-src 'self' data:;"
+    );
     const parsedUrl = parse(req.url ?? "/", true);
     handle(req, res, parsedUrl);
   });
@@ -80,13 +87,24 @@ app.prepare().then(() => {
   // Start the real-time streaming indexer
   const indexer = startHorizonStreamingIndexer({
     networkConfig: getNetworkConfig(),
-    onEvent: (rawEvent) => {
+    stateStore: createFileIngestionStateStore(
+      process.env.INGESTION_STATE_FILE ?? ".open-audit/ingestion-state.json"
+    ),
+    coldStartLookbackLedgers: Number(process.env.INGESTION_COLD_START_LOOKBACK_LEDGERS ?? "100"),
+    onEvent: async (rawEvent) => {
       console.log(`[Indexer] New event: ${rawEvent.id} from contract ${rawEvent.contractId}`);
-      const translated = translateEvent(rawEvent);
+
+      const processed = await processEventForIpfs(rawEvent);
+      rawEvent.data = processed.data;
+      rawEvent.topics = processed.topics;
+
+      const translated = recordTranslationDuration(rawEvent.contractId, () => translateEvent(rawEvent));
+      eventsIngestedTotal.labels(rawEvent.contractId, translated.status === "translated" ? "success" : "failed").inc();
       broadcast(translated);
     },
     onError: (err) => {
       captureExceptionSync(err, { context: { operation: "horizonStreamingIndexer" } });
+      console.error("[Indexer] Streaming error:", err);
     },
   });
 
