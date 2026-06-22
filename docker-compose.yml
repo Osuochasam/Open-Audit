@@ -31,6 +31,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Buildx multi-platform target — matches the CI workflow.
+      # Remove the platform line if your local Docker daemon doesn't support
+      # cross-compilation (it will default to the host architecture).
       args:
         BUILDKIT_INLINE_CACHE: "1"
     ports:
@@ -42,13 +45,6 @@ services:
       PORT: "3000"
       # Point the app at the compose-networked Redis instance.
       REDIS_URL: redis://redis:6379
-      # Retention policy — override as needed for your environment.
-      RETENTION_DAYS: "180"
-      RETENTION_BATCH_SIZE: "500"
-      RETENTION_ARCHIVE_DIR: /app/archives
-      RETENTION_CRON: "0 2 * * *"
-      RETENTION_ENABLED: "true"
-      RETENTION_DRY_RUN: "false"
     depends_on:
       redis:
         condition: service_healthy
@@ -59,10 +55,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 40s
-    volumes:
-      # Persist CSV archives outside the container for cold-storage upload
-      - archive_data:/app/archives
 
 volumes:
   redis_data:
-  archive_data:

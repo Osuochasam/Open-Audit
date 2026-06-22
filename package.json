@@ -6,6 +6,10 @@
     "dev": "next dev",
     "dev:ws": "ts-node --project tsconfig.server.json server.ts",
     "build": "next build",
+    "build:native": "npm run --prefix native/soroban-xdr-decode build",
+    "build:native:debug": "npm run --prefix native/soroban-xdr-decode build:debug",
+    "build:native:docker": "npm run --prefix native/soroban-xdr-decode build:docker",
+    "build:all": "npm run build:native && npm run build",
     "start": "next start",
     "lint": "next lint",
     "lint:registry": "tsx scripts/lint-registry.ts",
@@ -24,12 +28,12 @@
     "retention:dry-run": "ts-node --project tsconfig.server.json scripts/retention.ts --dry-run"
   },
   "dependencies": {
-    "@prisma/client": "^5.22.0",
     "@radix-ui/react-dialog": "^1.0.5",
     "@radix-ui/react-slot": "^1.0.2",
     "@radix-ui/react-toast": "^1.2.17",
     "@radix-ui/react-tooltip": "^1.0.7",
     "@sentry/node": "^10.59.0",
+    "@clickhouse/client": "^1.0.0",
     "bull": "^4.11.5",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
@@ -43,15 +47,19 @@
     "prisma": "^5.8.0",
     "react": "^18",
     "react-dom": "^18",
+    "react-force-graph-3d": "^1.25.0",
     "react-syntax-highlighter": "^16.1.1",
     "redis": "^4.6.12",
     "stellar-sdk": "^12.1.0",
     "swagger-ui-react": "^5.32.6",
     "tailwind-merge": "^2.3.0",
     "tailwindcss-animate": "^1.0.7",
+    "three": "^0.179.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/bull": "^4.10.4",
     "@types/ioredis": "^4.28.10",
     "@types/js-yaml": "^4.0.9",
@@ -66,7 +74,9 @@
     "autoprefixer": "^10.0.1",
     "eslint": "^8",
     "eslint-config-next": "14.2.3",
+    "happy-dom": "^20.10.6",
     "ioredis": "^5.11.1",
+    "jsdom": "^27.0.1",
     "msw": "^2.14.6",
     "postcss": "^8",
     "prettier": "^3.2.5",
@@ -74,6 +84,7 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",
     "typescript": "^5",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "vitest-axe": "^0.1.0"
   }
 }
