@@ -39,40 +39,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── Rust toolchain — generate Cargo.lock if absent ────────────────────
-      # The lockfile must exist before `docker build` so the COPY in the
-      # rust-builder stage succeeds.  We generate it on the runner (fast,
-      # no compilation) and cache it between runs.
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-lock-${{ hashFiles('native/soroban-xdr-decode/Cargo.toml') }}
-          restore-keys: cargo-lock-
-
-      - name: Generate Cargo.lock (if not committed)
-        working-directory: native/soroban-xdr-decode
-        run: |
-          if [ ! -f Cargo.lock ]; then
-            cargo generate-lockfile
-          fi
-
-      # ── QEMU — enables cross-arch emulation on the amd64 runner ───────────
+      # ── QEMU — cross-arch kernel emulation ───────────────────────────────
+      # Required so the arm64 Docker stage can run arm64 binaries during
+      # the build (e.g. the final Next.js SSR checks).
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       # ── Buildx ────────────────────────────────────────────────────────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # Inline cache requires the containerd image store driver.
+          driver-opts: image=moby/buildkit:latest
 
-      # ── Registry login (skipped on PRs / forks) ───────────────────────────
+      # ── Registry login (skipped on forks / PRs) ───────────────────────────
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -81,7 +61,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Image tags ────────────────────────────────────────────────────────
+      # ── Image tags + labels ───────────────────────────────────────────────
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -94,11 +74,18 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
 
+      # Sanitise "linux/amd64" → "linux-amd64" for use as a cache key / filename.
       - name: Sanitise platform string
         id: sanitise
-        run: echo "platform=$( echo '${{ matrix.platform }}' | tr '/' '-' )" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "platform=$( echo '${{ matrix.platform }}' | tr '/' '-' )" \
+            >> "$GITHUB_OUTPUT"
 
-      # ── Build (push on non-PR; tarball on PR) ─────────────────────────────
+      # ── Build — push on main/tag, local tarball on PR ─────────────────────
+      #
+      # NOTE: Cargo.lock is generated inside the Dockerfile via a BuildKit
+      # cache mount (--mount=type=cache).  It does NOT need to be committed
+      # or generated on the runner first.
       - name: Build and push image (push event)
         id: build_push
         if: github.event_name != 'pull_request'
@@ -109,7 +96,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # TARGETARCH is set automatically by Buildx from the platform value.
+          # TARGETARCH is automatically set by Buildx from the platform value.
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache-${{ steps.sanitise.outputs.platform }}
           cache-to:   type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache-${{ steps.sanitise.outputs.platform }},mode=max
           provenance: false
@@ -120,15 +107,21 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          # Build for the single platform being tested in this matrix leg.
           platforms: ${{ matrix.platform }}
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Export to a platform-specific filename so the two matrix legs
+          # don't overwrite each other's tarballs on the same runner.
           outputs: type=docker,dest=/tmp/image-${{ steps.sanitise.outputs.platform }}.tar
           provenance: false
 
-      # ── Trivy — install CLI directly (action tags are unreliable post ─────
-      # GHSA-69fq-xp46-6x23 supply-chain incident, Mar 2026).
+      # ── Trivy — install CLI directly ──────────────────────────────────────
+      # We do NOT use aquasecurity/trivy-action because its tags are pinned
+      # to an action SHA that was compromised in the Mar 2026 supply-chain
+      # incident (GHSA-69fq-xp46-6x23).  Installing the CLI directly from the
+      # official install script is the safe alternative.
       - name: Install Trivy
         run: |
           curl -sfL \
@@ -136,8 +129,9 @@ jobs:
             | sh -s -- -b /usr/local/bin v0.61.0
           trivy --version
 
-      # Scan the pushed image by digest (non-PR) ────────────────────────────
-      - name: Run Trivy image scan (push event)
+      # ── Scan image for HIGH/CRITICAL CVEs ────────────────────────────────
+      # exit-code 0 on the SARIF run so the file is always written.
+      - name: Run Trivy image scan — SARIF (push event)
         if: github.event_name != 'pull_request'
         run: |
           trivy image \
@@ -145,12 +139,12 @@ jobs:
             --output trivy-results.sarif \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
+            --ignorefile .trivyignore \
             --no-progress \
             --exit-code 0 \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_push.outputs.digest }}"
 
-      # Scan the local tarball (PR) ─────────────────────────────────────────
-      - name: Run Trivy image scan (pull_request event)
+      - name: Run Trivy image scan — SARIF (pull_request event)
         if: github.event_name == 'pull_request'
         run: |
           trivy image \
@@ -158,11 +152,12 @@ jobs:
             --output trivy-results.sarif \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
+            --ignorefile .trivyignore \
             --no-progress \
             --exit-code 0 \
             --input /tmp/image-${{ steps.sanitise.outputs.platform }}.tar
 
-      # ── Upload SARIF — guarded so a missing file never hard-fails CI ──────
+      # Upload SARIF only when the file was actually written.
       - name: Upload Trivy SARIF report
         if: always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
@@ -170,7 +165,9 @@ jobs:
           sarif_file: trivy-results.sarif
           category: trivy-docker-${{ steps.sanitise.outputs.platform }}
 
-      # Re-run with --exit-code 1 to set job status; runs after SARIF upload ─
+      # Re-run in table mode with exit-code 1 to set the job status.
+      # Runs after the SARIF upload so the Security tab is always populated.
+      # continue-on-error keeps the job "yellow" rather than hard-failing the PR.
       - name: Fail on HIGH/CRITICAL vulnerabilities (push event)
         if: github.event_name != 'pull_request'
         continue-on-error: true
@@ -179,6 +176,7 @@ jobs:
             --format table \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
+            --ignorefile .trivyignore \
             --no-progress \
             --exit-code 1 \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_push.outputs.digest }}"
@@ -191,11 +189,12 @@ jobs:
             --format table \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
+            --ignorefile .trivyignore \
             --no-progress \
             --exit-code 1 \
             --input /tmp/image-${{ steps.sanitise.outputs.platform }}.tar
 
-  # ── Merge per-platform digests into a single multi-arch manifest ──────────
+  # ── Merge per-platform layers into a single multi-arch manifest ───────────
   merge-manifest:
     name: Merge multi-arch manifest
     runs-on: ubuntu-latest
@@ -222,6 +221,8 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:latest
 
       - name: Extract Docker metadata
         id: meta
@@ -233,19 +234,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
-
-      # Install stable Rust to generate Cargo.lock (needed by Dockerfile COPY).
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-
-      - name: Generate Cargo.lock (if not committed)
-        working-directory: native/soroban-xdr-decode
-        run: |
-          if [ ! -f Cargo.lock ]; then
-            cargo generate-lockfile
-          fi
 
       - name: Build and push multi-arch manifest
         uses: docker/build-push-action@v5
