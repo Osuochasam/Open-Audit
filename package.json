@@ -37,6 +37,10 @@
     "test:wasm:manual": "node scripts/test-wasm-sandbox.js",
     "test:wasm:benchmark": "node scripts/test-wasm-sandbox.js benchmark",
     "wasm:build-examples": "cd lib/wasm-sandbox/examples/rust && ./build-all.sh",
+    "build:cli": "tsc cli/open-audit-cli.ts --outDir dist --module commonjs --target es2020 --moduleResolution node --esModuleInterop --resolveJsonModule --skipLibCheck",
+    "cli": "node dist/cli/open-audit-cli.js",
+    "cli:test": "bash cli/test-cli.sh",
+    "cli:example": "npm run build:cli && node dist/cli/open-audit-cli.js test --hex 0x74726e7312345678 --spec cli/examples/token-transfer.json --verbose",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:seed": "ts-node prisma/seed.ts",
@@ -44,6 +48,7 @@
   },
   "dependencies": {
     "ajv": "^8.12.0",
+    "commander": "^11.1.0",
     "prisma": "^5.8.0",
     "@radix-ui/react-dialog": "^1.0.5",
     "@radix-ui/react-slot": "^1.0.2",
@@ -66,7 +71,8 @@
     "swagger-ui-react": "^5.32.6",
     "tailwind-merge": "^2.3.0",
     "tailwindcss-animate": "^1.0.7",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yaml": "^2.3.4"
   },
   "devDependencies": {
     "@types/bull": "^4.10.8",

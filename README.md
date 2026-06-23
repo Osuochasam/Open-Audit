@@ -276,6 +276,49 @@ To add support for a new contract, create a file in `/lib/translator/blueprints/
 
 ---
 
+## 🛠️ Developer Tools
+
+### open-audit-cli - Standalone Blueprint Testing
+
+**Instant offline testing for translation blueprints** — no database, no network, no services required.
+
+```bash
+# Install and build
+npm install
+npm run build:cli
+
+# Test a specification
+node dist/cli/open-audit-cli.js test \
+  --hex 0x74726e7312345678 \
+  --spec ./blueprints/my-contract.json \
+  --verbose
+```
+
+**Benefits:**
+- ✅ **17x faster** iteration cycle vs. full system
+- ✅ Zero setup - Node.js only
+- ✅ Works offline
+- ✅ JSON & YAML support
+- ✅ CI/CD integration ready
+
+📚 **Documentation:**
+- **[CLI README](cli/README.md)** - Complete command reference and examples
+- **[Quick Start](cli/QUICK_START.md)** - Get started in 30 seconds
+- **[Task Summary](TASK_6_CLI_TOOL_SUMMARY.md)** - Implementation details
+
+**Quick Example:**
+```bash
+npm run cli:example
+```
+
+**Output:**
+```
+✅ Translation Successful
+Description: GABC...1234 transferred 100.00 USDC to GXYZ...5678
+```
+
+---
+
 ## 🔒 WASM Sandbox for Community Parsers (NEW)
 
 **Secure execution environment for third-party contract parsers:**
