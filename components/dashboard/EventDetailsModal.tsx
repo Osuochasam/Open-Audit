@@ -74,7 +74,7 @@ export function EventDetailsModal({
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Badge
-                  variant={isTranslated ? "default" : "secondary"}
+                  variant={isTranslated ? "success" : event.status === "pending" ? "secondary" : "warning"}
                 >
                   {event.status}
                 </Badge>

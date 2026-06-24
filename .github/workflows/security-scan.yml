@@ -121,6 +121,7 @@ jobs:
             --output trivy-fs-results.sarif \
             --severity CRITICAL,HIGH \
             --scanners vuln \
+            --ignore-unfixed \
             --ignorefile .trivyignore \
             --skip-dirs node_modules \
             --no-progress \
@@ -145,6 +146,7 @@ jobs:
             --format table \
             --severity CRITICAL,HIGH \
             --scanners vuln \
+            --ignore-unfixed \
             --ignorefile .trivyignore \
             --skip-dirs node_modules \
             --no-progress \

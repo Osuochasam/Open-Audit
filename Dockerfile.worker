@@ -18,8 +18,8 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Copy package files
-COPY package.json package-lock.json* ./
-RUN npm ci
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
 
 # ============================================================================
 # Builder stage
@@ -34,8 +34,8 @@ COPY . .
 # Generate Prisma client if using database
 RUN if [ -d "prisma" ]; then npx prisma generate; fi
 
-# Build TypeScript (if needed)
-# RUN npm run build:worker
+# Compile the worker TypeScript to JS so the runner image needs no TS toolchain.
+RUN npx tsc --project tsconfig.server.json
 
 # ============================================================================
 # Runner stage - Production image
@@ -49,15 +49,23 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 worker
 
-# Copy necessary files
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/lib ./lib
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/tsconfig.json ./
-COPY --from=builder /app/tsconfig.server.json ./
+# Copy lockfile and manifest so npm ci can install production deps reproducibly.
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/package-lock.json ./package-lock.json
 
-# Copy Prisma files if exists
+# Install production-only deps.
+RUN npm ci --omit=dev --ignore-scripts && \
+    npm cache clean --force
+
+# Copy compiled worker output (tsconfig.server.json → .server-dist/)
+COPY --from=builder /app/.server-dist ./.server-dist
+
+# Copy lib sources referenced at runtime by the compiled worker
+COPY --from=builder /app/lib ./lib
+
+# Copy Prisma files and regenerate client for this platform
 COPY --from=builder /app/prisma ./prisma
+RUN npx prisma generate
 
 # Set permissions
 RUN chown -R worker:nodejs /app
@@ -72,5 +80,5 @@ EXPOSE 9090
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD node -e "process.exit(0)"
 
-# Start the worker
-CMD ["npx", "ts-node", "--project", "tsconfig.server.json", "src/worker/indexer.ts"]
+# Start the compiled worker (no ts-node in production)
+CMD ["node", ".server-dist/src/worker/indexer.js"]

@@ -113,6 +113,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 RUN test -n "$(ls *.node 2>/dev/null)" || \
     { echo "ERROR: napi build produced no .node binary" >&2; exit 1; }
 
+# napi-rs --platform emits soroban-xdr-decode.<triple>.node; runtime code
+# requires index.node — create a symlink so require() resolves correctly.
+RUN NODE_FILE="$(ls soroban-xdr-decode.*.node 2>/dev/null | head -1)" && \
+    test -n "$NODE_FILE" && ln -sf "$(basename "$NODE_FILE")" index.node
+
 # ── Stage 2: deps ─────────────────────────────────────────────────────────────
 # Install Node.js production + dev dependencies in a throw-away layer.
 FROM node:20-alpine AS deps
@@ -139,6 +144,15 @@ COPY . .
 # napi-rs names it: soroban-xdr-decode.<target>.node
 # The glob captures it regardless of the exact target suffix.
 COPY --from=rust-builder /addon/*.node ./native/soroban-xdr-decode/
+
+# npm ci --ignore-scripts skips @prisma/client postinstall; generate explicitly
+# before Next.js compiles API routes that import the Prisma client.
+RUN npx prisma generate
+
+# Mirror the index.node symlink from rust-builder for the TS runtime binding.
+RUN cd native/soroban-xdr-decode && \
+    NODE_FILE="$(ls soroban-xdr-decode.*.node 2>/dev/null | head -1)" && \
+    test -n "$NODE_FILE" && ln -sf "$(basename "$NODE_FILE")" index.node
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -167,6 +181,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.server-dist     ./.server-dist
 COPY --from=builder --chown=nextjs:nodejs /app/public           ./public
 COPY --from=builder --chown=nextjs:nodejs /app/package.json     ./package.json
 COPY --from=builder --chown=nextjs:nodejs /app/package-lock.json ./package-lock.json
+COPY --from=builder --chown=nextjs:nodejs /app/prisma            ./prisma
 
 # Carry the .node binary to the runtime image.
 COPY --from=builder --chown=nextjs:nodejs \
@@ -174,6 +189,11 @@ COPY --from=builder --chown=nextjs:nodejs \
     ./native/soroban-xdr-decode/
 
 RUN npm ci --omit=dev --ignore-scripts && \
+    npx prisma generate && \
+    cd native/soroban-xdr-decode && \
+    NODE_FILE="$(ls soroban-xdr-decode.*.node 2>/dev/null | head -1)" && \
+    test -n "$NODE_FILE" && ln -sf "$(basename "$NODE_FILE")" index.node && \
+    cd /app && \
     npm cache clean --force
 
 USER nextjs
@@ -181,6 +201,6 @@ USER nextjs
 EXPOSE 3000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-    CMD wget -qO- http://localhost:3000/api/health || exit 1
+    CMD node -e "require('http').get('http://localhost:3000/api/health',(r)=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"
 
 CMD ["node", ".server-dist/server.js"]
