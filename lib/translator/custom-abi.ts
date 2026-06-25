@@ -17,6 +17,8 @@
  */
 
 import { decodeAddress, decodeAmount, decodeEventName, truncateHex } from "./decode";
+import { sanitizeTextField, sanitizeTemplateParam } from "./core";
+import { RegistryTemplateException } from "../errors";
 import type {
   CustomAbi,
   CustomAbiEvent,
@@ -24,6 +26,7 @@ import type {
   RawEvent,
   TranslationBlueprint,
   TranslationResult,
+  Language,
 } from "./types";
 
 /** localStorage key under which uploaded ABIs are stored. */
@@ -61,13 +64,17 @@ export function parseCustomAbi(input: unknown, fallbackContractId?: string): Cus
     (fallbackContractId ? fallbackContractId.trim() : null);
 
   if (!contractId) {
-    throw new Error("A Contract ID is required to associate this ABI with a contract.");
+    throw new RegistryTemplateException(
+      "A Contract ID is required to associate this ABI with a contract.",
+      { operation: "parseCustomAbi" }
+    );
   }
 
   const eventRecords = collectEventRecords(input);
   if (eventRecords.length === 0) {
-    throw new Error(
-      "No event definitions were found. Expected an `events` array or a contract spec with event entries."
+    throw new RegistryTemplateException(
+      "No event definitions were found. Expected an `events` array or a contract spec with event entries.",
+      { contractId, operation: "parseCustomAbi" }
     );
   }
 
@@ -137,8 +144,8 @@ export function customAbiToBlueprint(abi: CustomAbi): TranslationBlueprint {
   return {
     contractId: abi.contractId,
     contractName: `${abi.contractName} (Custom ABI)`,
-    translate: function (event: RawEvent): TranslationResult | null {
-      return translateWithAbi(abi, event);
+    translate: function (event: RawEvent, lang: Language): TranslationResult | null {
+      return translateWithAbi(abi, event, lang);
     },
   };
 }
@@ -153,7 +160,7 @@ export function buildCustomBlueprints(abis: CustomAbi[]): Map<string, Translatio
 }
 
 /** Attempts to translate an event using a custom ABI. */
-function translateWithAbi(abi: CustomAbi, event: RawEvent): TranslationResult | null {
+function translateWithAbi(abi: CustomAbi, event: RawEvent, lang: Language): TranslationResult | null {
   const topic0 = event.topics[0] ?? "";
   const decodedName = decodeEventName(topic0);
 
@@ -182,7 +189,8 @@ function matchesEvent(topicHex: string, decodedName: string, eventName: string):
 
 /** Renders a matched event into a human-readable sentence. */
 function renderEvent(eventDef: CustomAbiEvent, event: RawEvent): string {
-  const label = capitalize(eventDef.name);
+  // Sanitize the event label — it comes from user-uploaded ABI name field
+  const label = sanitizeTextField(capitalize(eventDef.name), { maxLength: 64 });
 
   if (eventDef.fields.length === 0) {
     return `${label} event emitted (${truncateHex(event.data, 8)})`;
@@ -193,7 +201,9 @@ function renderEvent(eventDef: CustomAbiEvent, event: RawEvent): string {
 
   const parts = eventDef.fields.map(function (field: CustomAbiField, index: number): string {
     const hex = positions[index] ?? "0x00";
-    return `${field.name}: ${renderField(field, hex)}`;
+    // Sanitize field name from ABI and the rendered value from blockchain data
+    const safeName = sanitizeTextField(field.name, { maxLength: 64 });
+    return `${safeName}: ${renderField(field, hex)}`;
   });
 
   return `${label} — ${parts.join(", ")}`;
@@ -203,12 +213,15 @@ function renderEvent(eventDef: CustomAbiEvent, event: RawEvent): string {
 function renderField(field: CustomAbiField, hex: string): string {
   const type = field.type.toLowerCase();
   if (ADDRESS_TYPES.has(type)) {
+    // Address values are hex-only — safe to render without HTML escaping
     return `[${decodeAddress(hex).short}]`;
   }
   if (AMOUNT_TYPES.has(type)) {
+    // Numeric formatted values are safe
     return decodeAmount(hex).formatted;
   }
-  return truncateHex(hex, 6);
+  // Raw hex truncated — sanitize in case a future decoder emits human-readable text
+  return sanitizeTemplateParam(truncateHex(hex, 6));
 }
 
 // ── Persistence (localStorage) ───────────────────────────────────────────────

@@ -6,6 +6,9 @@
  * TranslationBlueprint — the contract-specific translation logic.
  */
 
+/** Supported languages. */
+export type Language = "en" | "es" | "fr" | "zh";
+
 /** A raw Soroban contract event as fetched from Horizon/RPC. */
 export interface RawEvent {
   /** Unique event identifier (ledger sequence + index). */
@@ -45,6 +48,11 @@ export interface TranslatedEvent {
   blueprintName: string | null;
   /** Short label for the event type, e.g. "Transfer", "Swap". */
   eventType: string | null;
+  /**
+   * The schema version label that was applied, if the blueprint is versioned.
+   * e.g. "v2". Null when the blueprint has no version label.
+   */
+  schemaVersion: string | null;
 }
 
 /**
@@ -57,10 +65,60 @@ export interface TranslationBlueprint {
   /** Human-readable name for this contract. */
   contractName: string;
   /**
+   * Optional event-level matcher used by the registry before calling translate().
+   * This lets a blueprint declare multi-topic requirements such as:
+   * topics[0] is "transfer" AND topics[2] is a specific status flag.
+   */
+  matches?: (event: RawEvent) => boolean;
+  /**
    * Attempts to translate a raw event into a human-readable string.
    * Returns null if this blueprint cannot handle the given event.
    */
-  translate: (event: RawEvent) => TranslationResult | null;
+  translate: (event: RawEvent, lang: Language) => TranslationResult | null;
+}
+
+/** A single topic condition within a multi-topic match. */
+export interface TopicCriterion {
+  /** Ordered topic index to inspect. */
+  index: number;
+  /** Exact hex/string value expected at the topic index. */
+  equals?: string;
+  /** Case-insensitive fragment expected inside the topic value. */
+  includes?: string;
+  /** Event-name string expected after decoding a Symbol topic. */
+  decodedName?: string;
+}
+
+/** Declarative criteria for matching a raw event before translation. */
+export interface EventMatchCriteria {
+  /** Contract ID expected for the event. */
+  contractId?: string;
+  /** All topic criteria must match. */
+  topics?: TopicCriterion[];
+}
+
+/**
+ * A versioned translation blueprint that is only active for events emitted
+ * at or after a specific ledger sequence number.
+ *
+ * Use this when a contract upgrade changes its event schema. Register multiple
+ * versioned blueprints for the same contract — the engine will automatically
+ * select the most recent schema whose `validFromLedger` is ≤ the event ledger.
+ *
+ * If `validFromLedger` is omitted (or 0), the schema applies to all ledgers
+ * (i.e. it is the original/baseline version).
+ */
+export interface VersionedTranslationBlueprint extends TranslationBlueprint {
+  /**
+   * The first ledger sequence number for which this schema is valid.
+   * Defaults to 0 (applies from genesis).
+   */
+  validFromLedger?: number;
+  /**
+   * Optional human-readable version label, e.g. "v1", "v2.1".
+   * Used for display and debugging only.
+   */
+  version?: string;
 }
 
 /** The result returned by a blueprint's translate function. */
@@ -108,11 +166,12 @@ export interface CustomAbiField {
   type: string;
 }
 
-/** Decoded XDR address (simplified representation). */
+/** Decoded XDR address. The publicKey is a canonical Stellar address string
+ *  starting with G (account) or C (contract). */
 export interface DecodedAddress {
-  /** The full Stellar public key (G... address). */
+  /** The full canonical Stellar address (G... or C...). */
   publicKey: string;
-  /** A shortened display version, e.g. "GABC...1234". */
+  /** A shortened display version, e.g. "GABC...1234" or "CDLZ...YSC". */
   short: string;
 }
 
@@ -124,4 +183,79 @@ export interface DecodedAmount {
   formatted: string;
   /** Token symbol if known. */
   symbol: string;
+}
+
+/** Represents a Soroban ScVal type discriminator. */
+export type ScValType =
+  | "Bool"
+  | "Void"
+  | "Error"
+  | "U32"
+  | "I32"
+  | "U64"
+  | "I64"
+  | "Timepoint"
+  | "Duration"
+  | "U128"
+  | "I128"
+  | "U256"
+  | "I256"
+  | "Bytes"
+  | "String"
+  | "Symbol"
+  | "Vec"
+  | "Map"
+  | "Address"
+  | "ContractInstance"
+  | "LedgerKeyContractInstance"
+  | "LedgerKeyNonce";
+
+/** A decoded ScVal value with its type information. */
+export interface DecodedScVal {
+  /** The type of the ScVal. */
+  type: ScValType;
+  /** The decoded value as a string representation. */
+  value: string;
+  /** Raw hex representation for debugging. */
+  hex: string;
+}
+
+/** A decoded Map entry (key-value pair). */
+export interface DecodedMapEntry {
+  /** The decoded key. */
+  key: DecodedScVal;
+  /** The decoded value. */
+  value: DecodedScVal;
+}
+
+/** A decoded Soroban Map (ScMap). */
+export interface DecodedMap {
+  /** The type discriminator. */
+  type: "Map";
+  /** Array of key-value pairs. */
+  entries: DecodedMapEntry[];
+  /** Human-readable summary. */
+  summary: string;
+}
+
+/** A decoded Soroban Vector (ScVec). */
+export interface DecodedVec {
+  /** The type discriminator. */
+  type: "Vec";
+  /** Array of decoded values. */
+  elements: DecodedScVal[];
+  /** Human-readable summary. */
+  summary: string;
+}
+
+/** A decoded Soroban Enum (ScVal with enum variant). */
+export interface DecodedEnum {
+  /** The type discriminator. */
+  type: "Enum";
+  /** The enum variant name/discriminant. */
+  variant: string;
+  /** The decoded value if the enum has a payload. */
+  value?: DecodedScVal;
+  /** Human-readable summary. */
+  summary: string;
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { Code, ExternalLink } from "lucide-react";
+import { Code, ExternalLink, Copy, Check } from "lucide-react";
+import React, { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -9,6 +10,16 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useToast } from "@/lib/hooks/use-toast";
+import { InclusionProofPanel } from "@/components/dashboard/InclusionProofPanel";
 import type { RawEvent } from "@/lib/translator/types";
 
 interface RawDataDialogProps {
@@ -17,23 +28,117 @@ interface RawDataDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+function CopyButton({ text }: { text: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const { toast } = useToast();
+
+  async function handleCopy(): Promise<void> {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    toast({ description: "Copied!" });
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 relative"
+            onClick={handleCopy}
+            aria-label="Copy to clipboard"
+          >
+            <span aria-live="polite" className="sr-only">
+              {copied ? "Copied" : ""}
+            </span>
+            {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Copy to clipboard</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+function ResolvableValue({
+  value,
+  mono,
+}: {
+  value: string;
+  mono?: boolean;
+}): React.JSX.Element {
+  const { content, loading, error } = useIpfsResolver(value);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <span>Resolving IPFS content...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-start gap-2">
+        <AlertCircle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+        <div className="text-sm">
+          <p className="text-amber-600 dark:text-amber-400 font-medium">
+            IPFS content unavailable
+          </p>
+          <p className={`text-xs mt-1 break-all ${mono ? "font-mono" : ""}`}>
+            {value}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const displayText = content ?? value;
+  return (
+    <div
+      className={`text-sm break-all rounded bg-muted px-3 py-2 ${mono ? "font-mono" : ""}`}
+    >
+      {displayText}
+    </div>
+  );
+}
+
 function RawDataField({
   label,
   value,
   mono,
+  resolvable,
 }: {
   label: string;
   value: string;
   mono?: boolean;
+  resolvable?: boolean;
 }): React.JSX.Element {
   return (
     <div className="space-y-1">
-      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</p>
-      <p
-        className={`text-sm break-all rounded bg-muted px-3 py-2 ${mono ? "font-mono" : ""}`}
-      >
-        {value}
-      </p>
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          {label}
+          {resolvable && isIpfsPointer(value) && (
+            <span className="ml-2 text-violet-500 text-[10px] font-normal normal-case">
+              (offloaded to IPFS)
+            </span>
+          )}
+        </p>
+        <CopyButton text={value} />
+      </div>
+      {resolvable ? (
+        <ResolvableValue value={value} mono={mono} />
+      ) : (
+        <div
+          className={`text-sm break-all rounded bg-muted px-3 py-2 ${mono ? "font-mono" : ""}`}
+        >
+          {value}
+        </div>
+      )}
     </div>
   );
 }
@@ -47,9 +152,11 @@ export function RawDataDialog({
 
   const horizonUrl = `https://horizon-testnet.stellar.org/transactions/${event.txHash}`;
 
+  const rawEventJson = JSON.stringify(event, null, 2);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Code className="h-5 w-5 text-muted-foreground" />
@@ -57,7 +164,8 @@ export function RawDataDialog({
           </DialogTitle>
           <DialogDescription>
             Hex-encoded XDR data as received from the Stellar network. This is what
-            Open-Audit translates into human-readable text.
+            Open-Audit translates into human-readable English. Large payloads (&gt;2KB)
+            are offloaded to IPFS for efficient storage.
           </DialogDescription>
         </DialogHeader>
 
@@ -72,25 +180,65 @@ export function RawDataDialog({
           />
 
           <div className="space-y-1">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              Topics ({event.topics.length})
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Topics ({event.topics.length})
+              </p>
+            </div>
             <div className="space-y-1">
               {event.topics.map(function (topic, index) {
                 return (
-                  <p
-                    key={index}
-                    className="text-sm break-all rounded bg-muted px-3 py-2 font-mono"
-                  >
-                    <span className="text-muted-foreground mr-2">[{index}]</span>
-                    {topic}
-                  </p>
+                  <div key={index} className="relative">
+                    <div className="absolute right-2 top-2">
+                      <CopyButton text={topic} />
+                    </div>
+                    <div className="text-sm break-all rounded bg-muted px-3 py-2 font-mono pr-12">
+                      <span className="text-muted-foreground mr-2">[{index}]</span>
+                      {isIpfsPointer(topic) ? (
+                        <TopicIpfsValue value={topic} />
+                      ) : (
+                        topic
+                      )}
+                    </div>
+                  </div>
                 );
               })}
             </div>
           </div>
 
-          <RawDataField label="Data" value={event.data} mono />
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Data
+                {isIpfsPointer(event.data) && (
+                  <span className="ml-2 text-violet-500 text-[10px] font-normal normal-case">
+                    (offloaded to IPFS)
+                  </span>
+                )}
+              </p>
+              <CopyButton text={event.data} />
+            </div>
+            <ResolvableValue value={event.data} mono />
+          </div>
+
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                JSON
+              </p>
+              <CopyButton text={rawEventJson} />
+            </div>
+            <div className="rounded bg-muted overflow-hidden">
+              <SyntaxHighlighter
+                language="json"
+                style={oneDark}
+                customStyle={{ margin: 0, fontSize: "0.875rem" }}
+                showLineNumbers={false}
+              >
+                {rawEventJson}
+              </SyntaxHighlighter>
+            </div>
+          </div>
 
           <div className="pt-2 border-t">
             <Button variant="outline" size="sm" asChild>
@@ -100,8 +248,36 @@ export function RawDataDialog({
               </a>
             </Button>
           </div>
+
+          {/* Cryptographic inclusion proof verifier */}
+          <InclusionProofPanel txHash={event.txHash} ledger={event.ledger} />
         </div>
       </DialogContent>
     </Dialog>
   );
+}
+
+function TopicIpfsValue({ value }: { value: string }): React.JSX.Element {
+  const { content, loading, error } = useIpfsResolver(value);
+  const displayText = content ?? value;
+
+  if (loading) {
+    return (
+      <span className="inline-flex items-center gap-1 text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Resolving...
+      </span>
+    );
+  }
+
+  if (error) {
+    return (
+      <span className="inline-flex items-center gap-1 text-amber-500">
+        <AlertCircle className="h-3 w-3" />
+        {value}
+      </span>
+    );
+  }
+
+  return <>{displayText}</>;
 }
