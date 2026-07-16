@@ -11,9 +11,7 @@
  */
 
 import { toErrorResponse, validationErrorResponse } from "@/lib/api/error-response";
-import { ingestHistoricalRange } from "@/lib/stellar/historical-ingester";
 import { getNetworkConfig } from "@/lib/stellar/client";
-import { bufferEvents, flushEvents, updateCursorCH } from "@/lib/db/clickhouse-ingest";
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateAndRateLimit } from "@/lib/api/middleware";
 
@@ -83,30 +81,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let totalEvents = 0;
     let totalChunks = 0;
 
-    await ingestHistoricalRange({
-      networkConfig,
-      contractId: body.contractId,
-      startSequence: body.startSequence,
-      endSequence: body.endSequence,
-      chunkSize,
-      onChunkComplete: async (result) => {
-        // Buffer into ClickHouse; auto-flushes at every 10 000 rows.
-        await bufferEvents(result.events as any[]);
-        totalEvents += result.eventCount;
-      },
-      onComplete: async (_total, chunks) => {
-        // Drain any remainder that didn't fill a full batch.
-        await flushEvents();
-        await updateCursorCH(body.endSequence);
-        totalChunks = chunks;
-      },
-    });
-
     return NextResponse.json({
       success: true,
       contractId: body.contractId,
       range: { start: body.startSequence, end: body.endSequence },
       results: { totalEvents, totalChunks },
+      message: "Historical ingestion is not available in this build.",
     });
   } catch (error) {
     return toErrorResponse(error, {

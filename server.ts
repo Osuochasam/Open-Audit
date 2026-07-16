@@ -42,11 +42,8 @@ import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { MOCK_RAW_EVENTS } from "./lib/mock-data";
 import { translateEvent } from "./lib/translator/registry";
-import { processEventForIpfs } from "./lib/ipfs/offloader";
 import { createFileIngestionStateStore, startResilientEventIngestion } from "./lib/stellar/indexer";
 import { getNetworkConfig } from "./lib/stellar/client";
-import { eventsIngestedTotal, metricsHandler, recordTranslationDuration, startTelemetry } from "./lib/metrics";
-import { startRetentionScheduler } from "./lib/retention/scheduler";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT ?? "3000", 10);
@@ -81,8 +78,6 @@ const app = next({ dev });
 const handle = app.getRequestHandler();
 
 app.prepare().then(async () => {
-  await startTelemetry();
-  startRetentionScheduler();
   const httpServer = createServer((req, res) => {
     res.setHeader(
       "Content-Security-Policy",
@@ -163,12 +158,7 @@ app.prepare().then(async () => {
     onEvent: async (rawEvent) => {
       console.log(`[Indexer] New event: ${rawEvent.id} from contract ${rawEvent.contractId}`);
 
-      const processed = await processEventForIpfs(rawEvent);
-      rawEvent.data = processed.data;
-      rawEvent.topics = processed.topics;
-
-      const translated = recordTranslationDuration(rawEvent.contractId, () => translateEvent(rawEvent));
-      eventsIngestedTotal.labels(rawEvent.contractId, translated.status === "translated" ? "success" : "failed").inc();
+      const translated = translateEvent(rawEvent);
       broadcast(translated);
     },
     onError: (err) => {
@@ -176,9 +166,6 @@ app.prepare().then(async () => {
       console.error("[Indexer] Streaming error:", err);
     },
   });
-
-  // Start the retention pruner cron (no-op if RETENTION_ENABLED=false)
-  schedulePruner();
 
   httpServer.listen(port, () => {
     console.log(`> Ready on http://localhost:${port}`);

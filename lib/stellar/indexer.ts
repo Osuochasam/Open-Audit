@@ -17,8 +17,6 @@ import { StellarNetworkException, XdrParsingException } from "../errors";
 import { createIngestionPool, DEFAULT_WORKER_COUNT, type IngestionPoolMetrics } from "./ingestion-pool";
 import type { StellarNetworkConfig } from "./client";
 import type { RawEvent } from "../translator/types";
-import { reconstructDagFromMetaXdr } from "../dag/engine";
-import type { ExecutionDag } from "../dag/types";
 
 /** Configuration for the indexer retry mechanism. */
 export interface IndexerRetryConfig {
@@ -490,12 +488,6 @@ export interface StreamingIndexerOptions {
    * to the stream. Omit for an unbounded buffer.
    */
   maxQueueSize?: number;
-  /**
-   * Optional callback invoked once per transaction when a Soroban execution
-   * DAG is successfully reconstructed from DiagnosticEvents.
-   * Called on the consumer thread — safe to perform async work.
-   */
-  onDag?: (dag: ExecutionDag) => void | Promise<void>;
 }
 
 /**
@@ -553,7 +545,7 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
   stop: () => void;
   getMetrics: () => IngestionPoolMetrics;
 } {
-  const { networkConfig, contractIds, onEvent, onError, workerCount, maxQueueSize, onDag } = options;
+  const { networkConfig, contractIds, onEvent, onError, workerCount, maxQueueSize } = options;
   const server = new Horizon.Server(networkConfig.horizonUrl);
 
   let isRunning = true;
@@ -620,26 +612,7 @@ export function startHorizonStreamingIndexer(options: StreamingIndexerOptions): 
                 events = meta.v4().sorobanMeta().events();
               }
 
-              // ── DAG reconstruction from DiagnosticEvents ─────────────────
-              // Runs independently of contract-event filtering so the DAG is
-              // always reconstructed for Soroban transactions, regardless of
-              // which contractIds are being monitored.
-              if (onDag && tx.result_meta_xdr) {
-                try {
-                  const dag = reconstructDagFromMetaXdr(
-                    tx.result_meta_xdr,
-                    tx.hash,
-                    tx.ledger_attr,
-                    Math.floor(Date.now() / 1000)
-                  );
-                  if (dag !== null) {
-                    await onDag(dag);
-                  }
-                } catch (dagErr) {
-                  // Never let DAG errors affect the main event pipeline.
-                  console.warn("[streaming-indexer] DAG reconstruction error:", dagErr);
-                }
-              }
+              // ── DAG reconstruction removed (lib/dag deleted) ──────────
 
               for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
                 const event = events[eventIndex];

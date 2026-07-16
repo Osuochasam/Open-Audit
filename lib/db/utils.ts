@@ -1,6 +1,5 @@
 import { db } from "./client";
 import { RawEvent } from "@/lib/translator/types";
-import { processEventForIpfs } from "@/lib/ipfs/offloader";
 
 /**
  * Initialize database connection and run migrations
@@ -26,7 +25,7 @@ export async function upsertEvent(
     eventType?: string;
   }
 ): Promise<void> {
-  const processed = await processEventForIpfs(event);
+  const processed = { data: event.data, topics: event.topics, cids: [] as string[] };
 
   await db.event.upsert({
     where: { id: event.id },
@@ -73,7 +72,7 @@ export async function batchUpsertEvents(
 
     const results = await Promise.all(
       chunk.map(async (event) => {
-        const processed = await processEventForIpfs(event);
+        const processed = { data: event.data, topics: event.topics, cids: [] as string[] };
         return db.event
           .upsert({
             where: { id: event.id },

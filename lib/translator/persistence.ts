@@ -10,8 +10,6 @@
 import type { RawEvent, TranslatedEvent } from "./types";
 import { translateWithCache } from "./registry";
 import { db } from "../db/client";
-import { processEventForIpfs } from "../ipfs/offloader";
-import { triggerWebhooksForEvent } from "../jobs/queue";
 import { OpenAuditError } from "../errors";
 import { setCachedTranslation, isRedisEnabled } from "../cache/redisCache";
 
@@ -75,18 +73,15 @@ export async function translateAndPersistEvent(
   }
 
   try {
-    const processed = await processEventForIpfs(rawEvent);
-
-    const savedEvent = await db.event.upsert({
+    await db.event.upsert({
       where: { id: rawEvent.id },
       update: {
         description: translated.description,
         status: translated.status,
         blueprintName: translated.blueprintName,
         eventType: translated.eventType,
-        data: processed.data,
-        topics: processed.topics,
-        ipfsCids: processed.cids.length > 0 ? processed.cids : undefined,
+        data: rawEvent.data,
+        topics: rawEvent.topics,
         updatedAt: new Date(),
       },
       create: {
@@ -95,25 +90,14 @@ export async function translateAndPersistEvent(
         ledger: rawEvent.ledger,
         timestamp: rawEvent.timestamp,
         txHash: rawEvent.txHash,
-        topics: processed.topics,
-        data: processed.data,
+        topics: rawEvent.topics,
+        data: rawEvent.data,
         description: translated.description,
         status: translated.status,
         blueprintName: translated.blueprintName,
         eventType: translated.eventType,
-        ipfsCids: processed.cids.length > 0 ? processed.cids : undefined,
       },
     });
-
-    // Trigger webhooks for the saved event
-    try {
-      await triggerWebhooksForEvent(savedEvent);
-    } catch (webhookError) {
-      console.error("[webhooks] Failed to trigger webhooks:", webhookError);
-    }
-
-    translated.raw.data = processed.data;
-    translated.raw.topics = processed.topics;
 
     if (isRedisEnabled()) {
       await setCachedTranslation(rawEvent, translated);

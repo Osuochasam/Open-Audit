@@ -12,18 +12,6 @@ vi.mock("../registry", async () => {
   };
 });
 
-vi.mock("@/lib/jobs/queue", () => ({
-  triggerWebhooksForEvent: vi.fn(),
-}));
-
-vi.mock("@/lib/ipfs/offloader", () => ({
-  processEventForIpfs: vi.fn(async (event: RawEvent) => ({
-    data: event.data,
-    topics: event.topics,
-    cids: [],
-  })),
-}));
-
 const mockedTranslateEvent = translateEvent as unknown as vi.MockedFunction<typeof translateEvent>;
 
 const event: RawEvent = {
