@@ -109,7 +109,7 @@ export function DashboardClient(): React.JSX.Element {
         }
 
         if (filters.minAmount !== undefined) {
-          const amount = Number(event.raw.data ? BigInt("0x" + event.raw.data.slice(2).replace(/[^0-9a-fA-F]/g, "0")) : 0n);
+          const amount = Number(event.raw.data ? BigInt("0x" + event.raw.data.slice(2).replace(/[^0-9a-fA-F]/g, "0")) : BigInt(0));
           if (Number(amount) < filters.minAmount) {
             return false;
           }
